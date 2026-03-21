@@ -129,7 +129,7 @@ Phase 6              Assemble and send email via Resend API
 | 十字路口 | `60502e253c92d4f62c2a9577` |
 | 42章经 | `648b0b641c48983391a63f98` |
 | Why Not TV | `686a1832222ae2de21fea940` |
-| 张晓骏访谈录 | `626b46ea9cbbf0451cf5a962` |
+| 张小珺访谈录 | `626b46ea9cbbf0451cf5a962` |
 | 乱翻书 | `61358d971c5d56efe5bcb5d2` |
 | 科技乱炖 | `5e4243cd418a84a0469573fb` |
 | 硅谷101 | `5e5c52c9418a84a04625e6cc` |
