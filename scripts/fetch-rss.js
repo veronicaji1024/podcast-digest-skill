@@ -32,8 +32,17 @@ async function fetchFeed(rssUrl, maxItems = 10) {
     if (item.enclosure) {
       const enc = Array.isArray(item.enclosure) ? item.enclosure[0] : item.enclosure;
       audioUrl = enc?.$ ? enc.$.url : enc?.url || null;
-      // 去掉查询参数（避免 DashScope 拒绝带参数的 URL）
-      if (audioUrl) audioUrl = audioUrl.split('?')[0];
+      // 小宇宙的 URL 形如 https://jt.ximalaya.com/...?jt=https://aod.cos.tx.xmcdn.com/...
+      // jt 参数才是真实 CDN 地址，优先使用
+      if (audioUrl) {
+        try {
+          const u = new URL(audioUrl);
+          const jt = u.searchParams.get('jt');
+          audioUrl = jt || audioUrl.split('?')[0];
+        } catch (_) {
+          audioUrl = audioUrl.split('?')[0];
+        }
+      }
     }
 
     // 提取 GUID（用于去重）

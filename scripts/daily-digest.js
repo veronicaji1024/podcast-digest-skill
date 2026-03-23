@@ -182,7 +182,7 @@ async function callQwen(systemPrompt, userContent, model = QWEN_MODEL) {
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
       ],
-      max_tokens: 4096,
+      max_tokens: 8192,
     },
     {
       headers: {
@@ -233,12 +233,14 @@ async function summarizeEpisodeChunked(podcastName, episodeTitle, transcript, is
   const chunks = chunkText(transcript, CHUNK_SIZE, OVERLAP);
   console.log(`  [${podcastName}] transcript 分块: ${chunks.length} 块，共 ${transcript.length} 字`);
 
-  // 并行对每块生成摘要片段
-  const chunkSummaries = await Promise.all(
-    chunks.map((chunk, i) =>
-      summarizeEpisodeSingle(podcastName, episodeTitle, chunk, isEnglish, `第 ${i + 1}/${chunks.length} 段`)
-    )
-  );
+  // 串行对每块生成摘要片段（避免并发过高触发限流）
+  const chunkSummaries = [];
+  for (let i = 0; i < chunks.length; i++) {
+    if (i > 0) await sleep(1000);
+    chunkSummaries.push(
+      await summarizeEpisodeSingle(podcastName, episodeTitle, chunks[i], isEnglish, `第 ${i + 1}/${chunks.length} 段`)
+    );
+  }
 
   // 合并前清洗：去掉以 meta 指令开头的行（如"续接上文"、"接下来"、"以下为"等）
   const META_PREFIXES = /^(续接|接下来|以下为|以下是|如前所述|综上所述|上文提到|继续|接续)/;
@@ -294,7 +296,7 @@ async function translateTranscript(podcastName, transcript) {
 async function synthesizeAll(items) {
   const summaries = items
     .map((r) => {
-      const preview = r.notes ? r.notes.slice(0, 3000) : '[无内容]';
+      const preview = r.notes ? r.notes.slice(0, 8000) : '[无内容]';
       return `【${r.podcast.name}·${r.ep.title}】\n${preview}`;
     })
     .join('\n\n---\n\n');
@@ -370,43 +372,42 @@ function today() {
  * 第一阶段：并行拉取所有 RSS / YouTube 元数据 + 选集
  */
 async function fetchAllEpisodes(state) {
-  const tasks = [];
-
+  // 小宇宙：串行拉取，避免并发请求压垮本地 rsshub
+  const zhResults = [];
   for (const podcast of config.podcasts.xiaoyuzhou) {
     if (podcast.skip) continue;
     if (TEST_PODCAST && podcast.name !== TEST_PODCAST) continue;
-    tasks.push(async () => {
-      const processedGuids = new Set(state.processedEpisodes[podcast.name] || []);
-      const { episodes } = await fetchXiaoyuzhouEpisodes(podcast, RSSHUB, config.maxEpisodesPerFeed);
-      const ep = pickUnprocessedEpisode(episodes, processedGuids);
-      return ep ? { podcast, ep, type: 'xiaoyuzhou' } : null;
-    });
+    const processedGuids = new Set(state.processedEpisodes[podcast.name] || []);
+    const { episodes } = await fetchXiaoyuzhouEpisodes(podcast, RSSHUB, config.maxEpisodesPerFeed);
+    const ep = pickUnprocessedEpisode(episodes, processedGuids);
+    if (ep) zhResults.push({ podcast, ep, type: 'xiaoyuzhou' });
   }
 
+  // YouTube + RSS：并行拉取（各打不同服务器，无需限流）
+  const enTasks = [];
   for (const podcast of config.podcasts.youtube) {
     if (podcast.skip) continue;
     if (TEST_PODCAST && podcast.name !== TEST_PODCAST) continue;
-    tasks.push(async () => {
+    enTasks.push(async () => {
       const processedGuids = new Set(state.processedEpisodes[podcast.name] || []);
-      const ep = pickYouTubeEpisode(podcast, processedGuids); // yt-dlp 含字幕，同步
+      const ep = pickYouTubeEpisode(podcast, processedGuids);
       return ep ? { podcast, ep, type: 'youtube', transcript: ep.transcript } : null;
     });
   }
-
   for (const podcast of config.podcasts.rss) {
     if (podcast.skip) continue;
     if (TEST_PODCAST && podcast.name !== TEST_PODCAST) continue;
-    tasks.push(async () => {
+    enTasks.push(async () => {
       const processedGuids = new Set(state.processedEpisodes[podcast.name] || []);
       const { episodes } = await fetchRssEpisodes(podcast, config.maxEpisodesPerFeed);
       const ep = pickUnprocessedEpisode(episodes, processedGuids);
       return ep ? { podcast, ep, type: 'rss' } : null;
     });
   }
+  const enResults = await pLimit(enTasks, 8);
 
-  // 并行执行，最多 8 个并发（避免过载）
-  const results = await pLimit(tasks, 8);
-  return results.filter(Boolean);
+  const results = [...zhResults, ...enResults.filter(Boolean)];
+  return results;
 }
 
 /**
@@ -473,32 +474,30 @@ async function waitAllAsrTasks(taskMap) {
  * 第四阶段：并行生成所有笔记（分块处理）+ 英文 transcript 分块翻译
  */
 async function summarizeAll(items) {
-  console.log(`\n[Qwen] 并行生成 ${items.length} 个摘要...`);
+  console.log(`\n[Qwen] 生成 ${items.length} 个摘要（并发 2）...`);
 
-  await Promise.all(
-    items.map(async (item) => {
-      const isEnglish = item.type !== 'xiaoyuzhou';
-      try {
-        // 生成结构化笔记（自动分块）
-        item.notes = await summarizeEpisodeChunked(
-          item.podcast.name,
-          item.ep.title,
-          item.transcript,
-          isEnglish
-        );
-        console.log(`  [${item.podcast.name}] 笔记完成 (${item.notes.length} 字)`);
+  const tasks = items.map((item) => async () => {
+    const isEnglish = item.type !== 'xiaoyuzhou';
+    try {
+      item.notes = await summarizeEpisodeChunked(
+        item.podcast.name,
+        item.ep.title,
+        item.transcript,
+        isEnglish
+      );
+      console.log(`  [${item.podcast.name}] 笔记完成 (${item.notes.length} 字)`);
 
-        // 英文播客：额外生成完整中文译文（分块翻译）
-        if (isEnglish && item.transcript) {
-          item.zhTranslation = await translateTranscript(item.podcast.name, item.transcript);
-          console.log(`  [${item.podcast.name}] 译文完成 (${item.zhTranslation.length} 字)`);
-        }
-      } catch (err) {
-        console.error(`  [${item.podcast.name}] 处理失败: ${err.message}`);
-        item.notes = `[摘要生成失败: ${err.message}]`;
+      if (isEnglish && item.transcript) {
+        item.zhTranslation = await translateTranscript(item.podcast.name, item.transcript);
+        console.log(`  [${item.podcast.name}] 译文完成 (${item.zhTranslation.length} 字)`);
       }
-    })
-  );
+    } catch (err) {
+      console.error(`  [${item.podcast.name}] 处理失败: ${err.message}`);
+      item.notes = `[摘要生成失败: ${err.message}]`;
+    }
+  });
+
+  await pLimit(tasks, 2);
 }
 
 /**
