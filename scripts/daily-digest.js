@@ -366,6 +366,22 @@ function today() {
   return new Date().toISOString().split('T')[0];
 }
 
+function sanitizeFilename(str) {
+  return str.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 100);
+}
+
+function saveTranscript(podcastName, episodeTitle, transcript) {
+  if (!transcript || transcript.startsWith('[')) return;
+  try {
+    const podDir = path.join(process.env.HOME, '.podcast-digest', 'transcripts', sanitizeFilename(podcastName));
+    ensureDir(podDir);
+    const filename = sanitizeFilename(episodeTitle) + '.txt';
+    fs.writeFileSync(path.join(podDir, filename), transcript, 'utf8');
+  } catch (err) {
+    console.error(`  [Transcript] 保存失败 (${podcastName}): ${err.message}`);
+  }
+}
+
 // ─── 主流程（并行优化版）──────────────────────────────────────────────────────
 
 /**
@@ -551,11 +567,12 @@ async function main() {
   const taskMap = await submitAllAsrTasks(items);
   const asrResults = await waitAllAsrTasks(taskMap);
 
-  // 将转录结果写回 items
+  // 将转录结果写回 items，并保存到本地
   for (const item of items) {
     if (!item.transcript) {
       item.transcript = asrResults[item.podcast.name] || item.ep.description || '[无文字稿]';
     }
+    saveTranscript(item.podcast.name, item.ep.title, item.transcript);
   }
 
   // 阶段4：并行生成笔记（分块）+ 英文译文（分块）
