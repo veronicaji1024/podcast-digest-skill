@@ -173,26 +173,41 @@ function chunkText(text, chunkSize, overlap = 0) {
 const SUMMARIZE_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, 'summarize-episode.md'), 'utf8');
 const SYNTHESIZE_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, 'synthesize-all.md'), 'utf8');
 
-async function callQwen(systemPrompt, userContent, model = QWEN_MODEL) {
-  const res = await axios.post(
-    `${QWEN_BASE}/chat/completions`,
-    {
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent },
-      ],
-      max_tokens: 8192,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${DASHSCOPE_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 300000,
+async function callQwen(systemPrompt, userContent, model = QWEN_MODEL, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await axios.post(
+        `${QWEN_BASE}/chat/completions`,
+        {
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent },
+          ],
+          max_tokens: 8192,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${DASHSCOPE_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 300000,
+        }
+      );
+      return res.data?.choices?.[0]?.message?.content || '';
+    } catch (err) {
+      const isNetworkErr = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'socket hang up'].some(
+        (s) => err.message?.includes(s) || err.code === s
+      );
+      if (isNetworkErr && attempt < retries) {
+        const delay = attempt * 5000;
+        console.warn(`  [Qwen] 网络错误，${delay / 1000}s 后重试 (${attempt}/${retries}): ${err.message}`);
+        await sleep(delay);
+      } else {
+        throw err;
+      }
     }
-  );
-  return res.data?.choices?.[0]?.message?.content || '';
+  }
 }
 
 // ─── 单集笔记生成（支持分块）────────────────────────────────────────────────
