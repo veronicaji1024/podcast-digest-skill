@@ -373,7 +373,7 @@ function sanitizeFilename(str) {
 function saveTranscript(podcastName, episodeTitle, transcript) {
   if (!transcript || transcript.startsWith('[')) return;
   try {
-    const podDir = path.join(process.env.HOME, '.podcast-digest', 'transcripts', sanitizeFilename(podcastName));
+    const podDir = path.join(process.env.HOME, 'Downloads', '小程序', 'podcast-digest', 'transcripts', sanitizeFilename(podcastName));
     ensureDir(podDir);
     const filename = sanitizeFilename(episodeTitle) + '.txt';
     fs.writeFileSync(path.join(podDir, filename), transcript, 'utf8');

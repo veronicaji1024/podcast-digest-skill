@@ -17,7 +17,7 @@ const { fetchXiaoyuzhouEpisodes } = require('./fetch-rss');
 const CONFIG_PATH = path.join(process.env.HOME, '.podcast-digest', 'config.json');
 const STATE_PATH  = path.join(process.env.HOME, '.podcast-digest', 'state.json');
 const PROMPTS_DIR = path.join(__dirname, '..', 'prompts');
-const TRANSCRIPTS_DIR = path.join(process.env.HOME, '.podcast-digest', 'transcripts');
+const TRANSCRIPTS_DIR = path.join(process.env.HOME, 'Downloads', '小程序', 'podcast-digest', 'transcripts');
 
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 
